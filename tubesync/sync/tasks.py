@@ -257,7 +257,7 @@ def download_media_metadata(media_id):
                          f'{source.days_to_keep} days, skipping')
                 media.skip = True
 
-    if not re.search(filterText,media.title):
+    if not re.search(filter_text,media.title):
         #filter text not found in the media title. Accepts regex string
         media.skip = True
     # Check we can download the media item
