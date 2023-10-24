@@ -14,6 +14,12 @@ class ValidateSourceForm(forms.Form):
         label=_('Source URL'),
         required=True
     )
+    filter_text_include = forms.ChoiceField(
+        required=True,
+        choices = ((True, 'Include'),(False, 'Exclude')),
+        label = 'Toggle include/exclude',
+        widget=forms.Select()
+    )
 
 
 class ConfirmDeleteSourceForm(forms.Form):

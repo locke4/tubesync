@@ -295,6 +295,11 @@ class Source(models.Model):
         blank=True,
         help_text=_('Regex compatible filter string for video titles')
     )
+    filter_text_include = models.BooleanField(
+        _('Toggle include/exclude'),
+        default=True,
+        help_text=_('On to include filter text, off to exclude filter text')
+    )
     delete_removed_media = models.BooleanField(
         _('delete removed media'),
         default=False,
