@@ -102,6 +102,11 @@ class Source(models.Model):
         (FALLBACK_NEXT_BEST_HD, _('Get next best resolution but at least HD'))
     )
 
+    FILTER_TEXT_INCLUDE_CHOICES = (
+        (True, _('Include')),
+        (False, _('Exclude'))
+    )
+
     EXTENSION_M4A = 'm4a'
     EXTENSION_OGG = 'ogg'
     EXTENSION_MKV = 'mkv'
@@ -298,6 +303,8 @@ class Source(models.Model):
     filter_text_include = models.BooleanField(
         _('Toggle include/exclude'),
         default=True,
+        max_length=1,
+        choices=FILTER_TEXT_INCLUDE_CHOICES,
         help_text=_('On to include filter text, off to exclude filter text')
     )
     delete_removed_media = models.BooleanField(
