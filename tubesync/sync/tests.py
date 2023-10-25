@@ -1498,7 +1498,6 @@ class FormatMatchingTestCase(TestCase):
         for params, expected in expected_matches.items():        
             self.source.filter_text, self.source.filter_text_include = params
             expected_match_result = expected
-            print("Testing filter text: " + self.source.filter_text + " with include: " + str(self.source.filter_text_include))
             self.assertEqual(self.source.is_regex_match(self.media.title), expected_match_result)
 
 class TasksTestCase(TestCase):
