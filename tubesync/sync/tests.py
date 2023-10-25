@@ -1478,23 +1478,25 @@ class FormatMatchingTestCase(TestCase):
         
         self.media.metadata = all_test_metadata['boring']
         expected_matches = {
-            ('.*'): (True),
-            ('no fancy stuff'): (True),
-            ('No fancy stuff'): (False),
-            ('(?i)No fancy stuff'): (True), #set case insensitive flag
-            ('no'): (True),
-            ('Foo'): (False),
-            ('^(?!.*fancy).*$'): (False),
-            ('^(?!.*funny).*$'): (True),
-            ('(?=.*f.*)(?=.{0,2}|.{4,})'): (True),
-            ('f{4,}'): (False),
-            ('^[^A-Z]*$'): (True),
-            ('^[^a-z]*$'): (False),
-            ('^[^\\s]*$'): (False)
+            ('.*', True): (True),
+            ('no fancy stuff', True): (True),
+            ('no fancy stuff', False): (False),
+            ('No fancy stuff', True): (False),
+            ('(?i)No fancy stuff', True): (True), #set case insensitive flag
+            ('no', True): (True),
+            ('Foo', True): (False),
+            ('^(?!.*fancy).*$', True): (False),
+            ('^(?!.*funny).*$', True): (True),
+            ('(?=.*f.*)(?=.{0,2}|.{4,})', True): (True),
+            ('f{4,}', True): (False),
+            ('f{4,}', False): (True),
+            ('^[^A-Z]*$', True): (True),
+            ('^[^a-z]*$', True): (False),
+            ('^[^\\s]*$', True): (False)
         }
 
         for params, expected in expected_matches.items():
-            self.source.filter_text = params
+            self.source.filter_text, self.source.filter_text_include = params
             expected_match_result = expected
             self.assertEqual(self.source.is_regex_match(self.media.title), expected_match_result)
 
