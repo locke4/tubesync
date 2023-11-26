@@ -114,7 +114,7 @@ def get_media_download_task(media_id):
     except IndexError:
         return False
 
-
+@background(schedule=0)
 def delete_task_by_source(task_name, source_id):
     return Task.objects.filter(task_name=task_name, queue=str(source_id)).delete()
 
