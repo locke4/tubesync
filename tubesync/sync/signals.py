@@ -25,7 +25,7 @@ def source_pre_save(sender, instance, **kwargs):
         return
     if existing_source.index_schedule != instance.index_schedule:
         # Indexing schedule has changed, recreate the indexing task
-        delete_task_by_source('sync.tasks.index_source_task', instance.pk)
+        delete_task_by_source('sync.tasks.index_source_task', str(instance.pk))
         verbose_name = _('Index media from source "{}"')
         index_source_task(
             str(instance.pk),
@@ -48,7 +48,7 @@ def source_post_save(sender, instance, created, **kwargs):
             verbose_name=verbose_name.format(instance.name)
         )
         if instance.index_schedule > 0:
-            delete_task_by_source('sync.tasks.index_source_task', instance.pk)
+            delete_task_by_source('sync.tasks.index_source_task', str(instance.pk))
             log.info(f'Scheduling media indexing for source: {instance.name}')
             verbose_name = _('Index media from source "{}"')
             index_source_task(
@@ -78,7 +78,7 @@ def source_pre_delete(sender, instance, **kwargs):
 def source_post_delete(sender, instance, **kwargs):
     # Triggered after a source is deleted
     log.info(f'Deleting tasks for source: {instance.name}')
-    delete_task_by_source('sync.tasks.index_source_task', instance.pk)
+    delete_task_by_source('sync.tasks.index_source_task', str(instance.pk))
 
 
 @receiver(task_failed, sender=Task)
