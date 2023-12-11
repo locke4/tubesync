@@ -12,66 +12,35 @@ from .tasks import (delete_task_by_source, delete_task_by_media, index_source_ta
                     map_task_to_instance, check_source_directory_exists,
                     download_media, rescan_media_server)
 from .utils import delete_file
-
+#celery tasks, different to above import (TODO, remove from .tasks and add to .celerytasks perhaps?)
+from .tasks import pre_update_source, post_update_source, post_media_save, pre_source_delete 
 
 @receiver(pre_save, sender=Source)
 def source_pre_save(sender, instance, **kwargs):
     # Triggered before a source is saved, if the schedule has been updated recreate
     # its indexing task
+    
+
     try:
         existing_source = Source.objects.get(pk=instance.pk)
     except Source.DoesNotExist:
         # Probably not possible?
         return
     if existing_source.index_schedule != instance.index_schedule:
+        pre_update_source.delay(instance.pk)
         # Indexing schedule has changed, recreate the indexing task
-        delete_task_by_source('sync.tasks.index_source_task', instance.pk)
-        verbose_name = _('Index media from source "{}"')
-        index_source_task(
-            str(instance.pk),
-            repeat=instance.index_schedule,
-            queue=str(instance.pk),
-            priority=5,
-            verbose_name=verbose_name.format(instance.name),
-            remove_existing_tasks=True
-        )
-
 
 @receiver(post_save, sender=Source)
 def source_post_save(sender, instance, created, **kwargs):
     # Check directory exists and create an indexing task for newly created sources
-    if created:
-        verbose_name = _('Check download directory exists for source "{}"')
-        check_source_directory_exists(
-            str(instance.pk),
-            priority=0,
-            verbose_name=verbose_name.format(instance.name)
-        )
-        if instance.index_schedule > 0:
-            delete_task_by_source('sync.tasks.index_source_task', instance.pk)
-            log.info(f'Scheduling media indexing for source: {instance.name}')
-            verbose_name = _('Index media from source "{}"')
-            index_source_task(
-                str(instance.pk),
-                repeat=instance.index_schedule,
-                queue=str(instance.pk),
-                priority=5,
-                verbose_name=verbose_name.format(instance.name),
-                remove_existing_tasks=True
-            )
-    # Trigger the post_save signal for each media item linked to this source as various
-    # flags may need to be recalculated
-    for media in Media.objects.filter(source=instance):
-        media.save()
+    post_update_source.delay(instance.pk, instance.name, created, instance.index_schedule)
 
 
 @receiver(pre_delete, sender=Source)
 def source_pre_delete(sender, instance, **kwargs):
     # Triggered before a source is deleted, delete all media objects to trigger
     # the Media models post_delete signal
-    for media in Media.objects.filter(source=instance):
-        log.info(f'Deleting media for source: {instance.name} item: {media.name}')
-        media.delete()
+    pre_source_delete.delay(instance.pk)
 
 
 @receiver(post_delete, sender=Source)
@@ -94,126 +63,10 @@ def task_task_failed(sender, task_id, completed_task, **kwargs):
 @receiver(post_save, sender=Media)
 def media_post_save(sender, instance, created, **kwargs):
     # If the media is skipped manually, bail.
+    post_media_save.delay(instance.pk)
     if instance.manual_skip:
-        return
-
-    # Triggered after media is saved
-    cap_changed = False
-    can_download_changed = False
-    # Reset the skip flag if the download cap has changed if the media has not
-    # already been downloaded
-    if not instance.downloaded:
-        max_cap_age = instance.source.download_cap_date
-        filter_text = instance.source.filter_text
-        published = instance.published 
-
-        if instance.skip:
-            #currently marked to be skipped, check if skip conditions still apply
-            if not published:
-                log.debug(f'Media: {instance.source} / {instance} has no published date '
-                        f'set but is already marked to be skipped')
-            else:            
-                if max_cap_age and filter_text:
-                    if (published > max_cap_age) and (instance.source.is_regex_match(instance.title)):
-                        # Media was published after the cap date and matches the filter text, but is set to be skipped
-                        print('Has a valid publishing date and matches filter, marking unskipped')
-                        instance.skip = False
-                        cap_changed = True
-                    else:
-                        print('does not have a valid publishing date or filter string, already marked skipped')
-                        log.info(f'Media: {instance.source} / {instance} has no published date '
-                                f'set but is already marked to be skipped')
-                elif max_cap_age:
-                    if published > max_cap_age:
-                        # Media was published after the cap date but is set to be skipped
-                        log.info(f'Media: {instance.source} / {instance} has a valid '
-                                f'publishing date, marking to be unskipped')
-                        instance.skip = False
-                        cap_changed = True
-                elif filter_text:
-                    if instance.source.is_regex_match(instance.title):
-                        # Media matches the filter text but is set to be skipped
-                        log.info(f'Media: {instance.source} / {instance} matches the filter text, marking to be unskipped')
-                        instance.skip = False
-                        cap_changed = True
-        else:
-            if not published:
-                log.info(f'Media: {instance.source} / {instance} has no published date, marking to be skipped')
-                instance.skip = True
-                cap_changed = True
-            else:
-                if max_cap_age:
-                    if published <= max_cap_age:            
-                        log.info(f'Media: {instance.source} / {instance} is too old for '
-                                f'the download cap date, marking to be skipped')
-                        instance.skip = True
-                        cap_changed = True
-                if filter_text:
-                    if not instance.source.is_regex_match(instance.title):
-                        #media doesn't match the filter text but is not marked to be skipped
-                        log.info(f'Media: {instance.source} / {instance} does not match the filter text')
-                        instance.skip = True
-                        cap_changed = True
-      
-    # Recalculate the "can_download" flag, this may
-    # need to change if the source specifications have been changed
-    if instance.metadata:
-        if instance.get_format_str():
-            if not instance.can_download:
-                instance.can_download = True
-                can_download_changed = True
-        else:
-            if instance.can_download:
-                instance.can_download = False
-                can_download_changed = True
-    # Save the instance if any changes were required
-    if cap_changed or can_download_changed:
-        post_save.disconnect(media_post_save, sender=Media)
-        instance.save()
-        post_save.connect(media_post_save, sender=Media)
-    # If the media is missing metadata schedule it to be downloaded
-    if not instance.metadata:
-        log.info(f'Scheduling task to download metadata for: {instance.url}')
-        verbose_name = _('Downloading metadata for "{}"')
-        download_media_metadata(
-            str(instance.pk),
-            priority=5,
-            verbose_name=verbose_name.format(instance.pk),
-            remove_existing_tasks=True
-        )
-    # If the media is missing a thumbnail schedule it to be downloaded
-    if not instance.thumb_file_exists:
-        instance.thumb = None
-    if not instance.thumb:
-        thumbnail_url = instance.thumbnail
-        if thumbnail_url:
-            log.info(f'Scheduling task to download thumbnail for: {instance.name} '
-                     f'from: {thumbnail_url}')
-            verbose_name = _('Downloading thumbnail for "{}"')
-            download_media_thumbnail(
-                str(instance.pk),
-                thumbnail_url,
-                queue=str(instance.source.pk),
-                priority=10,
-                verbose_name=verbose_name.format(instance.name),
-                remove_existing_tasks=True
-            )
-    # If the media has not yet been downloaded schedule it to be downloaded
-    if not instance.media_file_exists:
-        instance.downloaded = False
-        instance.media_file = None
-    if (not instance.downloaded and instance.can_download and not instance.skip
-        and instance.source.download_media):
-        delete_task_by_media('sync.tasks.download_media', (str(instance.pk),))
-        verbose_name = _('Downloading media for "{}"')
-        download_media(
-            str(instance.pk),
-            queue=str(instance.source.pk),
-            priority=15,
-            verbose_name=verbose_name.format(instance.name),
-            remove_existing_tasks=True
-        )
-
+        return    
+    
 
 @receiver(pre_delete, sender=Media)
 def media_pre_delete(sender, instance, **kwargs):

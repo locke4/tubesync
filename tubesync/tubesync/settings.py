@@ -1,5 +1,5 @@
 from pathlib import Path
-
+import os
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 CONFIG_BASE_DIR = BASE_DIR
@@ -140,6 +140,9 @@ BACKGROUND_TASK_PRIORITY_ORDERING = 'ASC'   # Use 'niceness' task priority order
 COMPLETED_TASKS_DAYS_TO_KEEP = 7            # Number of days to keep completed tasks
 MAX_ENTRIES_PROCESSING = 0                  # Number of videos to process on source refresh (0 for no limit)
 
+CELERY_BROKER_URL = os.environ.get("CELERY_BROKER", "redis://localhost:6379/0")
+CELERY_RESULT_BACKEND = os.environ.get("CELERY_BROKER", "redis://localhost:6379/0")
+
 SOURCES_PER_PAGE = 100
 MEDIA_PER_PAGE = 144
 TASKS_PER_PAGE = 100
@@ -177,3 +180,4 @@ except ImportError as e:
 
 from .dbutils import patch_ensure_connection
 patch_ensure_connection()
+

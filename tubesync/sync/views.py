@@ -396,7 +396,7 @@ class SourceView(DetailView):
         self.message = self.messages.get(message_key, '')
         return super().dispatch(request, *args, **kwargs)
 
-    def get_context_data(self, *args, **kwargs):
+    """def get_context_data(self, *args, **kwargs):
         data = super().get_context_data(*args, **kwargs)
         data['message'] = self.message
         data['errors'] = []
@@ -405,7 +405,7 @@ class SourceView(DetailView):
             setattr(error, 'error_message', error_message)
             data['errors'].append(error)
         data['media'] = Media.objects.filter(source=self.object).order_by('-published')
-        return data
+        return data"""
 
 
 class UpdateSourceView(EditSourceMixin, UpdateView):
@@ -777,7 +777,7 @@ class TasksView(ListView):
 
     def get_queryset(self):
         return Task.objects.all().order_by('run_at')
-
+    
     def get_context_data(self, *args, **kwargs):
         data = super().get_context_data(*args, **kwargs)
         data['message'] = self.message
@@ -786,7 +786,7 @@ class TasksView(ListView):
         data['scheduled'] = []
         queryset = self.get_queryset()
         now = timezone.now()
-        for task in queryset:
+        for task in queryset: # TODO, replace this with pagination and limit query. queryset can be massive. Tasklist of 600 is a 9 second load time
             obj, url = map_task_to_instance(task)
             if not obj:
                 # Orphaned task, ignore it (it will be deleted when it fires)

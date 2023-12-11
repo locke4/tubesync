@@ -26,7 +26,222 @@ from common.utils import json_serial
 from .models import Source, Media, MediaServer
 from .utils import (get_remote_image, resize_image_to_height, delete_file,
                     write_text_file)
+import time
+from celery import shared_task
 
+@shared_task
+def create_task():
+    log.info("debug task")
+    return True
+
+@shared_task
+def pre_update_source(source_id):
+    try:
+        source = Source.objects.get(pk=source_id)
+        log.info(f'Updating source {source}')
+        delete_task_by_source('sync.tasks.index_source_task', source_id)
+        verbose_name = _('Index media from source "{}"')
+        index_source_task(
+            str(source_id),
+            repeat=source.index_schedule,
+            queue=str(source_id),
+            priority=5,
+            verbose_name=verbose_name.format(source.name),
+            remove_existing_tasks=True
+        )
+
+    except Source.DoesNotExist:
+        # Task triggered but the Source has been deleted, delete the task
+        log.info(f'Source does not exist with id {source_id}')
+        return
+
+@shared_task
+def post_update_source(source_id, name, created, index_schedule):
+    log.info(f'running post-update task {source_id} with {created}')
+    source = Source.objects.get(pk=source_id)
+    if created:
+        log.info(f'check source directory exists for {source_id}')
+        verbose_name = _('Check download directory exists for source "{}"')
+        check_source_directory_exists(
+            str(source_id),
+            priority=0,
+            verbose_name=verbose_name.format(name)
+        )
+        if index_schedule > 0:
+            delete_task_by_source('sync.tasks.index_source_task', source_id)
+            log.info(f'Scheduling media indexing for source: {name}')
+            verbose_name = _('Index media from source "{}"')
+            index_source_task(
+                str(source_id),
+                repeat=index_schedule,
+                queue=str(source_id),
+                priority=5,
+                verbose_name=verbose_name.format(name),
+                remove_existing_tasks=True
+            )
+    for media in Media.objects.filter(source=source):
+        media.save()
+
+@shared_task
+def post_media_save(media_id):
+    #log.info('post_media_save')
+    
+    media = Media.objects.get(pk=media_id)
+    log.info(f'post_media_save for {media.pk}')
+    
+    cap_changed = False
+    can_download_changed = False
+    # Reset the skip flag if the download cap has changed if the media has not
+    # already been downloaded
+    if not media.downloaded:
+        max_cap_age = media.source.download_cap_date
+        filter_text = media.source.filter_text
+        published = media.published 
+
+        if media.skip:
+            #currently marked to be skipped, check if skip conditions still apply
+            if not published:
+                log.debug(f'Media: {media.source} / {media} has no published date '
+                        f'set but is already marked to be skipped')
+            else:            
+                if max_cap_age and filter_text:
+                    if (published > max_cap_age) and (media.source.is_regex_match(media.title)):
+                        # Media was published after the cap date and matches the filter text, but is set to be skipped
+                        print('Has a valid publishing date and matches filter, marking unskipped')
+                        media.skip = False
+                        cap_changed = True
+                    else:
+                        print('does not have a valid publishing date or filter string, already marked skipped')
+                        log.info(f'Media: {media.source} / {media} has no published date '
+                                f'set but is already marked to be skipped')
+                elif max_cap_age:
+                    if published > max_cap_age:
+                        # Media was published after the cap date but is set to be skipped
+                        log.info(f'Media: {media.source} / {media} has a valid '
+                                f'publishing date, marking to be unskipped')
+                        media.skip = False
+                        cap_changed = True
+                elif filter_text:
+                    if media.source.is_regex_match(media.title):
+                        # Media matches the filter text but is set to be skipped
+                        log.info(f'Media: {media.source} / {media} matches the filter text, marking to be unskipped')
+                        media.skip = False
+                        cap_changed = True
+        else:
+            if not published:
+                log.info(f'Media: {media.source} / {media} has no published date, marking to be skipped')
+                media.skip = True
+                cap_changed = True
+            else:
+                if max_cap_age:
+                    if published <= max_cap_age:            
+                        log.info(f'Media: {media.source} / {media} is too old for '
+                                f'the download cap date, marking to be skipped')
+                        media.skip = True
+                        cap_changed = True
+                if filter_text:
+                    if not media.source.is_regex_match(media.title):
+                        #media doesn't match the filter text but is not marked to be skipped
+                        log.info(f'Media: {media.source} / {media} does not match the filter text')
+                        media.skip = True
+                        cap_changed = True
+      
+    # Recalculate the "can_download" flag, this may
+    # need to change if the source specifications have been changed
+    if media.metadata:
+        if media.get_format_str():
+            if not media.can_download:
+                media.can_download = True
+                can_download_changed = True
+        else:
+            if media.can_download:
+                media.can_download = False
+                can_download_changed = True
+    # Save the instance if any changes were required
+    if cap_changed or can_download_changed:
+        #post_save.disconnect(media_post_save, sender=Media)
+        media.save()
+        #post_save.connect(media_post_save, sender=Media)
+    # If the media is missing metadata schedule it to be downloaded
+    if not media.metadata:
+
+        log.info(f'Scheduling task to download metadata for: {media.url}')
+        pre_download_media_metadata(media.pk)
+        """verbose_name = _('Downloading metadata for "{}"')
+        download_media_metadata(
+            str(media.pk),
+            priority=5,
+            verbose_name=verbose_name.format(media.pk),
+            remove_existing_tasks=True
+        )"""
+    # If the media is missing a thumbnail schedule it to be downloaded
+    if not media.thumb_file_exists:
+        media.thumb = None
+    if not media.thumb:
+        thumbnail_url = media.thumbnail
+        if thumbnail_url:
+            log.info(f'Scheduling task to download thumbnail for: {media.name} '
+                     f'from: {thumbnail_url}')
+            pre_download_media_thumbnail(media.pk, thumbnail_url)
+            """verbose_name = _('Downloading thumbnail for "{}"')
+            download_media_thumbnail(
+                str(media.pk),
+                thumbnail_url,
+                queue=str(media.source.pk),
+                priority=10,
+                verbose_name=verbose_name.format(media.name),
+                remove_existing_tasks=True
+            )"""
+    # If the media has not yet been downloaded schedule it to be downloaded
+    if not media.media_file_exists:
+        media.downloaded = False
+        media.media_file = None
+    if (not media.downloaded and media.can_download and not media.skip
+        and media.source.download_media):
+        delete_task_by_media('sync.tasks.download_media', (str(media.pk),))
+        verbose_name = _('Downloading media for "{}"')
+        download_media(
+            str(media.pk),
+            queue=str(media.source.pk),
+            priority=15,
+            verbose_name=verbose_name.format(media.name),
+            remove_existing_tasks=True
+        )
+    return
+
+@shared_task
+def pre_download_media_metadata(media_id):
+    verbose_name = _('Downloading metadata for "{}"')
+    media = Media.objects.get(pk=media_id)
+    download_media_metadata(
+        str(media.pk),
+        priority=5,
+        verbose_name=verbose_name.format(media.pk),
+        remove_existing_tasks=True
+    )
+    return
+@shared_task
+def pre_download_media_thumbnail(media_id, thumbnail_url):
+    verbose_name = _('Downloading thumbnail for "{}"')
+    media = Media.objects.get(pk=media_id)    
+    download_media_thumbnail(
+        str(media.pk),
+        thumbnail_url,
+        queue=str(media.source.pk),
+        priority=10,
+        verbose_name=verbose_name.format(media.name),
+        remove_existing_tasks=True
+    )
+    return
+
+@shared_task
+def pre_source_delete(source_id):
+    log.info(f'running pre-delete task for source {source_id}')
+    source = Source.objects.get(pk=source_id)
+    for media in Media.objects.filter(source=source):
+        log.info(f'Deleting media for source: {source.name} item: {media.name}')
+        media.delete()
+    return
 
 def get_hash(task_name, pk):
     '''
