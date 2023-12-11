@@ -93,58 +93,58 @@ def post_media_save(media_id):
     can_download_changed = False
     # Reset the skip flag if the download cap has changed if the media has not
     # already been downloaded
-    if not media.downloaded:
+    if not media.downloaded and media.metadata:
         max_cap_age = media.source.download_cap_date
-        filter_text = media.source.filter_text
-        published = media.published 
-
-        if media.skip:
-            #currently marked to be skipped, check if skip conditions still apply
-            if not published:
-                log.debug(f'Media: {media.source} / {media} has no published date '
-                        f'set but is already marked to be skipped')
-            else:            
-                if max_cap_age and filter_text:
-                    if (published > max_cap_age) and (media.source.is_regex_match(media.title)):
-                        # Media was published after the cap date and matches the filter text, but is set to be skipped
-                        print('Has a valid publishing date and matches filter, marking unskipped')
-                        media.skip = False
-                        cap_changed = True
-                    else:
-                        print('does not have a valid publishing date or filter string, already marked skipped')
-                        log.info(f'Media: {media.source} / {media} has no published date '
-                                f'set but is already marked to be skipped')
-                elif max_cap_age:
-                    if published > max_cap_age:
-                        # Media was published after the cap date but is set to be skipped
-                        log.info(f'Media: {media.source} / {media} has a valid '
-                                f'publishing date, marking to be unskipped')
-                        media.skip = False
-                        cap_changed = True
-                elif filter_text:
-                    if media.source.is_regex_match(media.title):
-                        # Media matches the filter text but is set to be skipped
-                        log.info(f'Media: {media.source} / {media} matches the filter text, marking to be unskipped')
-                        media.skip = False
-                        cap_changed = True
-        else:
-            if not published:
-                log.info(f'Media: {media.source} / {media} has no published date, marking to be skipped')
+        filter_text = media.source.filter_text.strip()
+        published = media.published
+        if not published:
+            if not media.skip:
+                log.warn(f'Media: {media.source} / {media} has no published date '
+                         f'set, marking to be skipped')
                 media.skip = True
                 cap_changed = True
             else:
-                if max_cap_age:
-                    if published <= max_cap_age:            
-                        log.info(f'Media: {media.source} / {media} is too old for '
-                                f'the download cap date, marking to be skipped')
-                        media.skip = True
+                log.debug(f'Media: {media.source} / {media} has no published date '
+                          f'set but is already marked to be skipped')
+        else:
+            if max_cap_age:
+                if published > max_cap_age and media.skip:
+                    if filter_text:
+                        if media.source.is_regex_match(media.title):
+                            log.info(f'Media: {media.source} / {media} has a valid '
+                                    f'publishing date and title filter, marking to be unskipped')
+                            media.skip = False
+                            cap_changed = True
+                        else:
+                            log.debug(f'Media: {media.source} / {media} has a valid publishing date '
+                                      f'but failed the title filter match, already marked skipped')
+                    else:
+                        log.info(f'Media: {media.source} / {media} has a valid '
+                                 f'publishing date, marking to be unskipped')
+                        media.skip = False
                         cap_changed = True
-                if filter_text:
-                    if not media.source.is_regex_match(media.title):
-                        #media doesn't match the filter text but is not marked to be skipped
-                        log.info(f'Media: {media.source} / {media} does not match the filter text')
-                        media.skip = True
-                        cap_changed = True
+                elif published <= max_cap_age and not media.skip:
+                    log.info(f'Media: {media.source} / {media} is too old for '
+                            f'the download cap date, marking to be skipped')
+                    media.skip = True
+                    cap_changed = True
+            else:
+                if media.skip:
+                    # Media marked to be skipped but source download cap removed
+                    if filter_text:
+                        if media.source.is_regex_match(media.title):
+                            log.info(f'Media: {media.source} / {media} has a valid '
+                                     f'publishing date and title filter, marking to be unskipped')
+                            media.skip = False
+                            cap_changed = True
+                        else:
+                            log.info(f'Media: {media.source} / {media} has a valid publishing date '
+                                     f'but failed the title filter match, already marked skipped')
+                else:
+                    log.debug(f'Media: {media.source} / {media} has a valid publishing date and '
+                              f'is already marked as not to be skipped')
+
+                    cap_changed = False
       
     # Recalculate the "can_download" flag, this may
     # need to change if the source specifications have been changed
@@ -446,11 +446,9 @@ def download_media_metadata(media_id):
         log.error(f'Task download_media_metadata(pk={media_id}) called but no '
                   f'media exists with ID: {media_id}')
         return
-    
     if media.manual_skip:
         log.info(f'Task for ID: {media_id} skipped, due to task being manually skipped.')
         return
-
     source = media.source
     metadata = media.index_metadata()
     media.metadata = json.dumps(metadata, default=json_serial)

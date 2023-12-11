@@ -661,6 +661,8 @@ class MediaTestCase(TestCase):
             '<episodedetails>',
             '  <title>no fancy stuff title</title>',
             '  <showtitle>testname</showtitle>',
+            '  <season>2017</season>',
+            '  <episode></episode>',
             '  <ratings>',
             '    <rating default="True" max="5" name="youtube">',
             '      <value>1.2345</value>',

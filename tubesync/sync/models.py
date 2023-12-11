@@ -119,7 +119,7 @@ class Source(models.Model):
         ('interaction', 'Interaction Reminder'),
         ('music_offtopic', 'Non-Music Section'),
     )
-    
+
     sponsorblock_categories = CommaSepChoiceField(
             _(''),
             possible_choices=SPONSORBLOCK_CATEGORIES_CHOICES,
@@ -547,7 +547,9 @@ class Source(models.Model):
             return ''
 
     def is_regex_match(self, media_item_title):
-        return bool(re.search(self.filter_text,media_item_title))       
+        if not self.filter_text:
+            return True
+        return bool(re.search(self.filter_text, media_item_title))
     
     def index_media(self):
         '''
@@ -1234,7 +1236,6 @@ class Media(models.Model):
             acodec = self.downloaded_audio_codec
             if acodec is None:
                 raise TypeError() # nothing here.
-            
             acodec = acodec.lower()
             if acodec == "mp4a":
                 return "audio/mp4"
@@ -1243,7 +1244,6 @@ class Media(models.Model):
             else:
                 # fall-fall-back.
                 return 'audio/ogg'
-
         vcodec = vcodec.lower()
         if vcodec == 'vp9':
             return 'video/webm'
@@ -1267,6 +1267,22 @@ class Media(models.Model):
         showtitle.text = str(self.source.name).strip()
         showtitle.tail = '\n  '
         nfo.append(showtitle)
+        # season = upload date year
+        season = nfo.makeelement('season', {})
+        if self.source.source_type == Source.SOURCE_TYPE_YOUTUBE_PLAYLIST:
+            # If it's a playlist, set season to 1
+            season.text = '1'
+        else:
+            # If it's not a playlist, set season to upload date year
+            season.text = str(self.upload_date.year) if self.upload_date else ''
+        season.tail = '\n  '
+        nfo.append(season)
+        # episode = number of video in the year
+        episode = nfo.makeelement('episode', {})
+        episode_number = self.calculate_episode_number()
+        episode.text = str(episode_number) if episode_number else ''
+        episode.tail = '\n  '
+        nfo.append(episode)
         # ratings = media metadata youtube rating
         value = nfo.makeelement('value', {})
         value.text = str(self.rating)
@@ -1390,6 +1406,19 @@ class Media(models.Model):
             raise Exception(f'Media with source type f"{self.source.source_type}" '
                             f'has no indexer')
         return indexer(self.url)
+
+    def calculate_episode_number(self):
+        if self.source.source_type == Source.SOURCE_TYPE_YOUTUBE_PLAYLIST:
+            sorted_media = Media.objects.filter(source=self.source)
+        else:
+            self_year = self.upload_date.year if self.upload_date else self.created.year
+            filtered_media = Media.objects.filter(source=self.source, published__year=self_year)
+            sorted_media = sorted(filtered_media, key=lambda x: (x.upload_date, x.key))
+        position_counter = 1
+        for media in sorted_media:
+            if media == self:
+                return position_counter
+            position_counter += 1
 
 
 class MediaServer(models.Model):
