@@ -65,8 +65,123 @@ def media_post_save(sender, instance, created, **kwargs):
     # If the media is skipped manually, bail.
     post_media_save.delay(instance.pk)
     if instance.manual_skip:
-        return    
-    
+        return
+    # Triggered after media is saved
+    cap_changed = False
+    can_download_changed = False
+    # Reset the skip flag if the download cap has changed if the media has not
+    # already been downloaded
+    if not instance.downloaded and instance.metadata:
+        max_cap_age = instance.source.download_cap_date
+        filter_text = instance.source.filter_text.strip()
+        published = instance.published
+        if not published:
+            if not instance.skip:
+                log.warn(f'Media: {instance.source} / {instance} has no published date '
+                         f'set, marking to be skipped')
+                instance.skip = True
+                cap_changed = True
+            else:
+                log.debug(f'Media: {instance.source} / {instance} has no published date '
+                          f'set but is already marked to be skipped')
+        else:
+            if max_cap_age:
+                if published > max_cap_age and instance.skip:
+                    if filter_text:
+                        if instance.source.is_regex_match(instance.title):
+                            log.info(f'Media: {instance.source} / {instance} has a valid '
+                                    f'publishing date and title filter, marking to be unskipped')
+                            instance.skip = False
+                            cap_changed = True
+                        else:
+                            log.debug(f'Media: {instance.source} / {instance} has a valid publishing date '
+                                      f'but failed the title filter match, already marked skipped')
+                    else:
+                        log.info(f'Media: {instance.source} / {instance} has a valid '
+                                 f'publishing date, marking to be unskipped')
+                        instance.skip = False
+                        cap_changed = True
+                elif published <= max_cap_age and not instance.skip:
+                    log.info(f'Media: {instance.source} / {instance} is too old for '
+                            f'the download cap date, marking to be skipped')
+                    instance.skip = True
+                    cap_changed = True
+            else:
+                if instance.skip:
+                    # Media marked to be skipped but source download cap removed
+                    if filter_text:
+                        if instance.source.is_regex_match(instance.title):
+                            log.info(f'Media: {instance.source} / {instance} has a valid '
+                                     f'publishing date and title filter, marking to be unskipped')
+                            instance.skip = False
+                            cap_changed = True
+                        else:
+                            log.info(f'Media: {instance.source} / {instance} has a valid publishing date '
+                                     f'but failed the title filter match, already marked skipped')
+                else:
+                    log.debug(f'Media: {instance.source} / {instance} has a valid publishing date and '
+                              f'is already marked as not to be skipped')
+
+                    cap_changed = False
+    # Recalculate the "can_download" flag, this may
+    # need to change if the source specifications have been changed
+    if instance.metadata:
+        if instance.get_format_str():
+            if not instance.can_download:
+                instance.can_download = True
+                can_download_changed = True
+        else:
+            if instance.can_download:
+                instance.can_download = False
+                can_download_changed = True
+    # Save the instance if any changes were required
+    if cap_changed or can_download_changed:
+        post_save.disconnect(media_post_save, sender=Media)
+        instance.save()
+        post_save.connect(media_post_save, sender=Media)
+    # If the media is missing metadata schedule it to be downloaded
+    if not instance.metadata:
+        log.info(f'Scheduling task to download metadata for: {instance.url}')
+        verbose_name = _('Downloading metadata for "{}"')
+        download_media_metadata(
+            str(instance.pk),
+            priority=5,
+            verbose_name=verbose_name.format(instance.pk),
+            remove_existing_tasks=True
+        )
+    # If the media is missing a thumbnail schedule it to be downloaded
+    if not instance.thumb_file_exists:
+        instance.thumb = None
+    if not instance.thumb:
+        thumbnail_url = instance.thumbnail
+        if thumbnail_url:
+            log.info(f'Scheduling task to download thumbnail for: {instance.name} '
+                     f'from: {thumbnail_url}')
+            verbose_name = _('Downloading thumbnail for "{}"')
+            download_media_thumbnail(
+                str(instance.pk),
+                thumbnail_url,
+                queue=str(instance.source.pk),
+                priority=10,
+                verbose_name=verbose_name.format(instance.name),
+                remove_existing_tasks=True
+            )
+    # If the media has not yet been downloaded schedule it to be downloaded
+    if not instance.media_file_exists:
+        instance.downloaded = False
+        instance.media_file = None
+    if (not instance.downloaded and instance.can_download and not instance.skip
+        and instance.source.download_media):
+        delete_task_by_media('sync.tasks.download_media', (str(instance.pk),))
+        verbose_name = _('Downloading media for "{}"')
+        download_media(
+            str(instance.pk),
+            queue=str(instance.source.pk),
+            priority=15,
+            verbose_name=verbose_name.format(instance.name),
+            remove_existing_tasks=True
+        )
+
 
 @receiver(pre_delete, sender=Media)
 def media_pre_delete(sender, instance, **kwargs):
